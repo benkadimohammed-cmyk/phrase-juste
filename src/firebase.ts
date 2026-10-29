@@ -1,4 +1,4 @@
-import { initializeApp } from "firebase/app";
+import { initializeApp, getApps, getApp } from "firebase/app";
 import {
   getAuth,
   GoogleAuthProvider,
@@ -9,17 +9,38 @@ import {
 } from "firebase/auth";
 import {
   getFirestore,
+  initializeFirestore,
+  setLogLevel,
   doc,
   setDoc,
-  getDocFromServer,
+  getDoc,
   onSnapshot,
   Unsubscribe,
+  Firestore,
 } from "firebase/firestore";
 import firebaseConfig from "../firebase-applet-config.json";
 import { UserProgress, UserSettings } from "./types/learning";
 
-const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+// Suppress noisy internal WebChannel timeout console.error logs when Firestore switches to long-polling or offline cache
+setLogLevel("silent");
+
+const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+
+function initFirestoreInstance(): Firestore {
+  try {
+    return initializeFirestore(
+      app,
+      {
+        experimentalAutoDetectLongPolling: true,
+      },
+      firebaseConfig.firestoreDatabaseId
+    );
+  } catch {
+    return getFirestore(app, firebaseConfig.firestoreDatabaseId);
+  }
+}
+
+export const db = initFirestoreInstance();
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 
@@ -56,8 +77,9 @@ export function handleFirestoreError(
   operationType: OperationType,
   path: string | null
 ): FirestoreErrorInfo {
+  const message = error instanceof Error ? error.message : String(error);
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: message,
     authInfo: {
       userId: auth.currentUser?.uid,
       email: auth.currentUser?.email,
@@ -75,20 +97,25 @@ export function handleFirestoreError(
     operationType,
     path,
   };
-  console.error("Firestore Error: ", JSON.stringify(errInfo));
+  if (
+    message.toLowerCase().includes("missing or insufficient permissions") ||
+    message.toLowerCase().includes("permission-denied")
+  ) {
+    console.error("Firestore Error: ", JSON.stringify(errInfo));
+    throw new Error(JSON.stringify(errInfo));
+  }
   return errInfo;
 }
 
 export async function testFirebaseConnection(): Promise<void> {
+  if (!firebaseConfig.projectId || !firebaseConfig.apiKey) {
+    console.warn("Firebase configuration is incomplete; operating in local mode.");
+    return;
+  }
   try {
-    await getDocFromServer(doc(db, "_connection_test_", "ping"));
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      error.message.includes("the client is offline")
-    ) {
-      console.error("Please check your Firebase configuration.");
-    }
+    await getDoc(doc(db, "test", "connection"));
+  } catch {
+    // Operate seamlessly in local/offline cache mode when Firestore backend is unreachable
   }
 }
 
@@ -118,12 +145,19 @@ export async function saveLearnerCloudState(
       doc(db, "users", user.uid),
       {
         uid: user.uid,
-        email: user.email || "",
-        displayName: user.displayName || settings.learnerName || "Apprenant",
-        settingsJson: JSON.stringify(settings),
-        progressJson: JSON.stringify(progress),
-        xp: Math.max(0, Math.floor(progress.xp || 0)),
-        streakDays: Math.max(0, Math.floor(progress.streakDays || 0)),
+        email: (user.email || "").slice(0, 320),
+        displayName: (
+          user.displayName ||
+          settings.learnerName ||
+          "Apprenant"
+        ).slice(0, 120),
+        settingsJson: JSON.stringify(settings).slice(0, 10000),
+        progressJson: JSON.stringify(progress).slice(0, 100000),
+        xp: Math.max(0, Math.min(1000000, Math.floor(progress.xp || 0))),
+        streakDays: Math.max(
+          0,
+          Math.min(3650, Math.floor(progress.streakDays || 0))
+        ),
         updatedAt: new Date().toISOString(),
       },
       { merge: true }
@@ -160,7 +194,7 @@ export function subscribeLearnerCloudState(
           updatedAt: data.updatedAt,
         });
       } catch (e) {
-        console.error("Failed to parse cloud learner state:", e);
+        console.warn("Failed to parse cloud learner state:", e);
       }
     },
     (error) => {

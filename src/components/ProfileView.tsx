@@ -59,7 +59,52 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [nameInput, setNameInput] = useState(settings.learnerName);
   const [savedBanner, setSavedBanner] = useState(false);
   const [confirmingReset, setConfirmingReset] = useState(false);
+  const [downloadingApk, setDownloadingApk] = useState(false);
   const { isInstallable, isInstalled, install } = usePWAInstall();
+
+  const GITHUB_RELEASE_APK_URL =
+    "https://github.com/benkadimohammed-cmyk/phrase-juste/releases/download/v1.0.0/Phrase-juste-v1.0.0.apk";
+
+  const handleDownloadApk = async (e: React.MouseEvent<HTMLAnchorElement>) => {
+    e.preventDefault();
+    if (downloadingApk) return;
+    setDownloadingApk(true);
+    try {
+      const response = await fetch("/releases/Phrase-juste-v1.0.0.apk", {
+        cache: "no-store",
+      });
+      if (response.ok) {
+        const buffer = await response.arrayBuffer();
+        const bytes = new Uint8Array(buffer);
+        // Verify PK\x03\x04 ZIP/APK magic header and minimum size (> 200 KB)
+        if (
+          bytes.length > 200000 &&
+          bytes[0] === 0x50 &&
+          bytes[1] === 0x4b &&
+          bytes[2] === 0x03 &&
+          bytes[3] === 0x04
+        ) {
+          const blob = new Blob([buffer], {
+            type: "application/vnd.android.package-archive",
+          });
+          const blobUrl = URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = blobUrl;
+          link.download = "Phrase-juste-v1.0.0.apk";
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+          setDownloadingApk(false);
+          return;
+        }
+      }
+    } catch {
+      // Fall back to direct GitHub Release asset URL
+    }
+    setDownloadingApk(false);
+    window.location.assign(GITHUB_RELEASE_APK_URL);
+  };
 
   const handleSaveName = (e: React.FormEvent) => {
     e.preventDefault();
@@ -108,14 +153,17 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
         <div className="flex flex-wrap items-center gap-2.5 shrink-0">
           <a
-            href="/releases/Phrase-juste-v1.0.0.apk"
+            href={GITHUB_RELEASE_APK_URL}
+            onClick={handleDownloadApk}
             download="Phrase-juste-v1.0.0.apk"
             data-testid="download-apk-btn"
             className="px-4 py-2.5 min-h-[44px] rounded-xl bg-blue-800 hover:bg-blue-900 dark:bg-blue-600 dark:hover:bg-blue-500 text-white text-xs sm:text-sm font-semibold inline-flex items-center gap-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <Download className="w-4 h-4" />
             <span>
-              {settings.uiLanguage === "ar"
+              {downloadingApk
+                ? "..."
+                : settings.uiLanguage === "ar"
                 ? "تنزيل APK (v1.0.0)"
                 : settings.uiLanguage === "en"
                 ? "Download APK (v1.0.0)"
