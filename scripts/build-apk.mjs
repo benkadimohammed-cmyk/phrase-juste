@@ -206,9 +206,8 @@ function main() {
 
   const javacBin = findExecutable("javac", [path.join(javaHome, "bin", "javac")]);
   const keytoolBin = findExecutable("keytool", [path.join(javaHome, "bin", "keytool")]);
-  const jarBin = findExecutable("jar", [path.join(javaHome, "bin", "jar")]);
 
-  // Locate build-tools directory (e.g., 34.0.0 or android-14)
+  // Locate build-tools directory (e.g., 36.0.0, 35.0.0, 34.0.0, or android-14)
   let buildToolsDir = "";
   for (const sdkRoot of androidHomeCandidates) {
     const btBase = path.join(sdkRoot, "build-tools");
@@ -230,16 +229,17 @@ function main() {
   const zipalignBin = findExecutable("zipalign", [path.join(buildToolsDir, "zipalign")]);
   const apksignerBin = findExecutable("apksigner", [path.join(buildToolsDir, "apksigner")]);
 
+  const platformVersions = ["android-36", "android-35", "android-34"];
   const androidJarCandidates = [
-    ...androidHomeCandidates.map((sdkRoot) =>
-      path.join(sdkRoot, "platforms", "android-34", "android.jar")
+    ...androidHomeCandidates.flatMap((sdkRoot) =>
+      platformVersions.map((ver) => path.join(sdkRoot, "platforms", ver, "android.jar"))
     ),
     "/tmp/android-tools/platforms/android-34/android.jar",
   ];
   const androidJar = androidJarCandidates.find((p) => fs.existsSync(p));
   if (!androidJar) {
     throw new Error(
-      `android-34/android.jar not found. Checked: ${androidJarCandidates.join(", ")}`
+      `android.jar not found. Checked: ${androidJarCandidates.join(", ")}`
     );
   }
 
@@ -305,11 +305,11 @@ function main() {
       "--java",
       genJavaDir,
       "--min-sdk-version",
-      "23",
+      "24",
       "--target-sdk-version",
-      "34",
+      "36",
       "--version-code",
-      "100",
+      "101",
       "--version-name",
       "1.0.0",
       "--auto-add-overlay",
@@ -370,7 +370,7 @@ function main() {
     [
       "--release",
       "--min-api",
-      "23",
+      "24",
       "--lib",
       androidJar,
       "--output",
@@ -380,12 +380,9 @@ function main() {
     { env: envWithJava, stdio: "inherit" }
   );
 
-  console.log("=== [7/8] Packaging uncompressed classes.dex & aligning APK (zipalign -p 4) ===");
-  fs.copyFileSync(path.join(dexOutDir, "classes.dex"), path.join(stageDir, "classes.dex"));
-  execFileSync(jarBin, ["u0f", linkedBaseApk, "-C", stageDir, "classes.dex"], {
-    env: envWithJava,
-    stdio: "inherit",
-  });
+  console.log("=== [7/8] Packaging uncompressed classes.dex (zero Data Descriptors) & aligning APK ===");
+  const dexBuffer = fs.readFileSync(path.join(dexOutDir, "classes.dex"));
+  appendStoredEntryToZip(linkedBaseApk, "classes.dex", dexBuffer);
 
   const alignedApk = path.join(workDir, "base-aligned.apk");
   execFileSync(zipalignBin, ["-p", "-f", "4", linkedBaseApk, alignedApk], {
@@ -393,7 +390,7 @@ function main() {
     stdio: "inherit",
   });
 
-  console.log("=== [8/8] Signing APK with V1 + V2 + V3 schemes & Verifying ===");
+  console.log("=== [8/8] Signing APK with V1 + V2 + V3 schemes & Verifying for Android 16 (API 36) ===");
   const { keystorePath, keystorePass, keyAlias, keyPass } = resolveSigningCredentials(
     keytoolBin,
     envWithJava
@@ -428,7 +425,7 @@ function main() {
     { env: envWithJava, stdio: "inherit" }
   );
 
-  // Verify alignment, signature, and badging
+  // Verify alignment, signature, badging, and zero ZIP Data Descriptors (required by Android 16 libziparchive)
   execFileSync(zipalignBin, ["-c", "-p", "4", finalApkPath], {
     env: envWithJava,
     stdio: "inherit",
@@ -437,6 +434,7 @@ function main() {
     env: envWithJava,
     stdio: "inherit",
   });
+  verifyZeroDataDescriptors(finalApkPath);
   const badging = execFileSync(aapt2Bin, ["dump", "badging", finalApkPath], {
     env: envWithJava,
     encoding: "utf8",
@@ -446,6 +444,132 @@ function main() {
 
   const stats = fs.statSync(finalApkPath);
   console.log(`=== SUCCESS: Verified APK generated at ${finalApkPath} (${stats.size} bytes) ===`);
+}
+
+const CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) {
+      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    }
+    table[n] = c >>> 0;
+  }
+  return table;
+})();
+
+function computeCrc32(buf) {
+  let c = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) {
+    c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  }
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+function appendStoredEntryToZip(zipPath, entryName, fileData) {
+  const buf = fs.readFileSync(zipPath);
+  let eocdOffset = -1;
+  for (let i = buf.length - 22; i >= 0; i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50) {
+      eocdOffset = i;
+      break;
+    }
+  }
+  if (eocdOffset === -1) {
+    throw new Error(`Invalid ZIP archive (EOCD not found): ${zipPath}`);
+  }
+
+  const totalEntries = buf.readUInt16LE(eocdOffset + 10);
+  const cdSize = buf.readUInt32LE(eocdOffset + 12);
+  const cdOffset = buf.readUInt32LE(eocdOffset + 16);
+
+  const beforeCd = buf.subarray(0, cdOffset);
+  const oldCd = buf.subarray(cdOffset, cdOffset + cdSize);
+
+  const nameBuf = Buffer.from(entryName, "utf8");
+  const fileCrc = computeCrc32(fileData);
+  const localHeaderOffset = beforeCd.length;
+
+  const lfh = Buffer.alloc(30 + nameBuf.length);
+  lfh.writeUInt32LE(0x04034b50, 0);
+  lfh.writeUInt16LE(10, 4);
+  lfh.writeUInt16LE(0, 6); // flags = 0 (strictly no GPBF_DATA_DESCRIPTOR)
+  lfh.writeUInt16LE(0, 8); // method = 0 (STORED)
+  lfh.writeUInt16LE(0, 10);
+  lfh.writeUInt16LE(0x0021, 12);
+  lfh.writeUInt32LE(fileCrc, 14);
+  lfh.writeUInt32LE(fileData.length, 18);
+  lfh.writeUInt32LE(fileData.length, 22);
+  lfh.writeUInt16LE(nameBuf.length, 26);
+  lfh.writeUInt16LE(0, 28);
+  nameBuf.copy(lfh, 30);
+
+  const cdh = Buffer.alloc(46 + nameBuf.length);
+  cdh.writeUInt32LE(0x02014b50, 0);
+  cdh.writeUInt16LE(20, 4);
+  cdh.writeUInt16LE(10, 6);
+  cdh.writeUInt16LE(0, 8); // flags = 0
+  cdh.writeUInt16LE(0, 10); // method = 0 (STORED)
+  cdh.writeUInt16LE(0, 12);
+  cdh.writeUInt16LE(0x0021, 14);
+  cdh.writeUInt32LE(fileCrc, 16);
+  cdh.writeUInt32LE(fileData.length, 20);
+  cdh.writeUInt32LE(fileData.length, 24);
+  cdh.writeUInt16LE(nameBuf.length, 28);
+  cdh.writeUInt16LE(0, 30);
+  cdh.writeUInt16LE(0, 32);
+  cdh.writeUInt16LE(0, 34);
+  cdh.writeUInt16LE(0, 36);
+  cdh.writeUInt32LE(0, 38);
+  cdh.writeUInt32LE(localHeaderOffset, 42);
+  nameBuf.copy(cdh, 46);
+
+  const newCdOffset = localHeaderOffset + lfh.length + fileData.length;
+  const newCdSize = oldCd.length + cdh.length;
+
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(0, 4);
+  eocd.writeUInt16LE(0, 6);
+  eocd.writeUInt16LE(totalEntries + 1, 8);
+  eocd.writeUInt16LE(totalEntries + 1, 10);
+  eocd.writeUInt32LE(newCdSize, 12);
+  eocd.writeUInt32LE(newCdOffset, 16);
+  eocd.writeUInt16LE(0, 20);
+
+  fs.writeFileSync(zipPath, Buffer.concat([beforeCd, lfh, fileData, oldCd, cdh, eocd]));
+}
+
+function verifyZeroDataDescriptors(apkPath) {
+  const buf = fs.readFileSync(apkPath);
+  let offset = 0;
+  let entryCount = 0;
+  while (offset < buf.length - 4) {
+    const sig = buf.readUInt32LE(offset);
+    if (sig !== 0x04034b50) break;
+    const flags = buf.readUInt16LE(offset + 6);
+    const method = buf.readUInt16LE(offset + 8);
+    const compSize = buf.readUInt32LE(offset + 18);
+    const nameLen = buf.readUInt16LE(offset + 26);
+    const extraLen = buf.readUInt16LE(offset + 28);
+    const name = buf.subarray(offset + 30, offset + 30 + nameLen).toString("utf8");
+    const dataOffset = offset + 30 + nameLen + extraLen;
+    if ((flags & 0x08) !== 0) {
+      throw new Error(
+        `APK entry '${name}' has forbidden GPBF_DATA_DESCRIPTOR (flags=0x${flags.toString(16)})`
+      );
+    }
+    if (method === 0 && dataOffset % 4 !== 0) {
+      throw new Error(
+        `Uncompressed APK entry '${name}' is not 4-byte aligned (offset=${dataOffset})`
+      );
+    }
+    entryCount++;
+    offset = dataOffset + compSize;
+  }
+  console.log(
+    `Verified ${entryCount} APK ZIP entries: 0 Data Descriptors, all STORED entries 4-byte aligned.`
+  );
 }
 
 main();

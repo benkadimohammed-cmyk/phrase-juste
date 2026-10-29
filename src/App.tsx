@@ -8,6 +8,7 @@ import { Award, CheckCircle2, Sparkles, X } from "lucide-react";
 import { User } from "firebase/auth";
 import {
   ActiveTab,
+  AuthAccount,
   Exercise,
   ExerciseType,
   GamificationNotification,
@@ -27,9 +28,11 @@ import {
   toggleLessonCompletion,
 } from "./utils/learningLogic";
 import {
+  getActiveAuthAccount,
   saveLearnerCloudState,
-  signInWithGoogle,
+  signInWithGoogleDirect,
   signOutLearner,
+  subscribeAuthAccountChanges,
   subscribeAuthChanges,
   subscribeLearnerCloudState,
   testFirebaseConnection,
@@ -42,6 +45,7 @@ import { ExerciseView } from "./components/ExerciseView";
 import { ProgressView } from "./components/ProgressView";
 import { CoachView } from "./components/CoachView";
 import { ProfileView } from "./components/ProfileView";
+import { AuthModal } from "./components/AuthModal";
 
 const STORAGE_KEY_PROGRESS = "phrase_juste_progress_v1";
 const STORAGE_KEY_SETTINGS = "phrase_juste_settings_v1";
@@ -53,6 +57,9 @@ const DEFAULT_SETTINGS: UserSettings = {
   dailyGoalMinutes: 15,
   darkMode: false,
   audioEnabled: true,
+  speechRate: 0.95,
+  learningObjective: "conversation",
+  learnerBio: "Passionné par la précision de la langue française et la richesse de ses expressions.",
 };
 
 function buildDefaultProgress(todayStr: string): UserProgress {
@@ -145,17 +152,28 @@ function buildDefaultProgress(todayStr: string): UserProgress {
 export default function App() {
   const [todayStr, setTodayStr] = useState<string>(() => getLocalDateString());
   const [authUser, setAuthUser] = useState<User | null>(null);
+  const [authAccount, setAuthAccount] = useState<AuthAccount | null>(() =>
+    getActiveAuthAccount()
+  );
   const [authLoading, setAuthLoading] = useState<boolean>(true);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
   const applyingCloudSnapshotRef = useRef<boolean>(false);
 
-  // Verify Firestore connection and subscribe to Firebase Auth state
+  // Verify Firestore connection and subscribe to Firebase + Local Auth state
   useEffect(() => {
     testFirebaseConnection();
     const unsubAuth = subscribeAuthChanges((user) => {
       setAuthUser(user);
       setAuthLoading(false);
     });
-    return () => unsubAuth();
+    const unsubAccount = subscribeAuthAccountChanges((acc) => {
+      setAuthAccount(acc);
+      setAuthLoading(false);
+    });
+    return () => {
+      unsubAuth();
+      unsubAccount();
+    };
   }, []);
 
   // Periodically check local midnight rollover
@@ -241,10 +259,11 @@ export default function App() {
     } catch {
       // Ignore storage quota errors
     }
-    if (authUser && !applyingCloudSnapshotRef.current) {
-      saveLearnerCloudState(authUser, settings, progress);
+    const targetAccount = authUser || authAccount;
+    if (targetAccount && !applyingCloudSnapshotRef.current) {
+      saveLearnerCloudState(targetAccount, settings, progress);
     }
-  }, [settings, authUser]);
+  }, [settings, authUser, authAccount]);
 
   useEffect(() => {
     try {
@@ -259,10 +278,11 @@ export default function App() {
     } catch {
       // Ignore storage quota errors
     }
-    if (authUser && !applyingCloudSnapshotRef.current) {
-      saveLearnerCloudState(authUser, settings, progress);
+    const targetAccount = authUser || authAccount;
+    if (targetAccount && !applyingCloudSnapshotRef.current) {
+      saveLearnerCloudState(targetAccount, settings, progress);
     }
-  }, [progress, authUser]);
+  }, [progress, authUser, authAccount]);
 
   // Synchronize Dark Mode and RTL / language attributes on documentElement
   useEffect(() => {
@@ -516,15 +536,32 @@ export default function App() {
     setProgress(freshProgress);
   };
 
+  const handleAuthenticated = (account: AuthAccount) => {
+    setAuthAccount(account);
+    if (account.displayName) {
+      setSettings((prev) => ({
+        ...prev,
+        learnerName: account.displayName || prev.learnerName,
+      }));
+    }
+    pushNotification({
+      kind: "xp",
+      title: `Connecté : ${account.email}`,
+      subtitle:
+        account.provider === "google"
+          ? "Compte Google synchronisé"
+          : "Compte E-mail synchronisé",
+    });
+  };
+
   const handleGoogleSignIn = async () => {
     try {
-      const user = await signInWithGoogle();
-      if (user && user.displayName) {
-        setSettings((prev) => ({
-          ...prev,
-          learnerName: user.displayName || prev.learnerName,
-        }));
-      }
+      const account = await signInWithGoogleDirect(
+        "insergent01@gmail.com",
+        settings.learnerName !== "Camille" ? settings.learnerName : "Mohammed",
+        false
+      );
+      handleAuthenticated(account);
     } catch (error) {
       console.error("Google Sign-In failed:", error);
     }
@@ -533,6 +570,7 @@ export default function App() {
   const handleSignOut = async () => {
     try {
       await signOutLearner();
+      setAuthAccount(null);
     } catch (error) {
       console.error("Sign-Out failed:", error);
     }
@@ -567,6 +605,14 @@ export default function App() {
         }}
         onStartQuickPractice={() => handleStartFilteredExercise("all")}
         t={t}
+      />
+
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        uiLanguage={settings.uiLanguage}
+        currentLearnerName={settings.learnerName}
+        onAuthenticated={handleAuthenticated}
       />
 
       {/* Restrained Gamification Notifications (XP, Level-Up, Achievements) */}
@@ -628,8 +674,10 @@ export default function App() {
             recommendedLesson={recommendedLesson}
             todayDateStr={todayStr}
             todayMinutes={todayMinutes}
+            authAccount={authAccount}
             t={t}
             onNavigate={setActiveTab}
+            onOpenAuthModal={() => setIsAuthModalOpen(true)}
             onOpenLesson={(lesson) => {
               setSelectedLesson(lesson);
               setActiveTab("lessons");
@@ -690,6 +738,7 @@ export default function App() {
             level={settings.level}
             uiLanguage={settings.uiLanguage}
             audioEnabled={settings.audioEnabled}
+            speechRate={settings.speechRate ?? 0.95}
             t={t}
           />
         )}
@@ -697,10 +746,15 @@ export default function App() {
         {activeTab === "profile" && (
           <ProfileView
             settings={settings}
+            progress={progress}
+            totalLessonsCount={LESSONS_DATA.length}
             t={t}
-            authUserEmail={authUser?.email || null}
+            authAccount={authAccount}
+            authUserEmail={authAccount?.email || authUser?.email || null}
             authLoading={authLoading}
             onSignInGoogle={handleGoogleSignIn}
+            onOpenAuthModal={() => setIsAuthModalOpen(true)}
+            onAuthenticated={handleAuthenticated}
             onSignOut={handleSignOut}
             onUpdateSettings={handleUpdateSettings}
             onResetProgress={handleResetProgress}
@@ -710,3 +764,4 @@ export default function App() {
     </div>
   );
 }
+

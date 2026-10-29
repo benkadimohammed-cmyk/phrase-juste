@@ -336,11 +336,12 @@ test("verified Phrase-juste-v1.0.0.apk contains APK Sig Block 42, compiled DEX 0
     "APK must be signed with APK Signature Scheme v2/v3"
   );
 
-  // 3. Contains uncompressed Dalvik bytecode header ("dex\n035\0") and MainActivity descriptor
+  // 3. Contains uncompressed Dalvik bytecode header ("dex\n037\0" or "dex\n035\0") and MainActivity descriptor
   assert.equal(
-    buf.includes(Buffer.from("dex\n035\0", "utf8")),
+    buf.includes(Buffer.from("dex\n037\0", "utf8")) ||
+      buf.includes(Buffer.from("dex\n035\0", "utf8")),
     true,
-    "APK must contain compiled DEX 035 bytecode"
+    "APK must contain compiled DEX 037/035 bytecode"
   );
   assert.equal(
     buf.includes(Buffer.from("Lapp/phrasejuste/mobile/MainActivity;", "utf8")),
@@ -355,5 +356,33 @@ test("verified Phrase-juste-v1.0.0.apk contains APK Sig Block 42, compiled DEX 0
     true,
     "APK must end with a valid ZIP End of Central Directory record"
   );
+
+  // 5. Zero entries have GPBF_DATA_DESCRIPTOR (0x08) and all STORED entries are 4-byte aligned (Android 16 / One UI 8.5 libziparchive requirement)
+  let offset = 0;
+  let checkedEntries = 0;
+  while (offset < buf.length - 4) {
+    if (buf.readUInt32LE(offset) !== 0x04034b50) break;
+    const flags = buf.readUInt16LE(offset + 6);
+    const method = buf.readUInt16LE(offset + 8);
+    const compSize = buf.readUInt32LE(offset + 18);
+    const nameLen = buf.readUInt16LE(offset + 26);
+    const extraLen = buf.readUInt16LE(offset + 28);
+    const dataOffset = offset + 30 + nameLen + extraLen;
+    assert.equal(
+      flags & 0x08,
+      0,
+      "APK entry must not use streaming ZIP Data Descriptor (0x08)"
+    );
+    if (method === 0) {
+      assert.equal(
+        dataOffset % 4,
+        0,
+        "STORED APK entry must be 4-byte aligned"
+      );
+    }
+    checkedEntries++;
+    offset = dataOffset + compSize;
+  }
+  assert.equal(checkedEntries >= 15, true, "APK must contain all packaged entries");
 });
 

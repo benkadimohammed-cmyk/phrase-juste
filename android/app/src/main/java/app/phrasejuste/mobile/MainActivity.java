@@ -49,6 +49,16 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public void stopSpeaking() {
+            if (tts != null) {
+                try {
+                    tts.stop();
+                } catch (Exception ignored) {
+                }
+            }
+        }
+
+        @JavascriptInterface
         public String getAppVersion() {
             return "1.0.0";
         }
@@ -83,7 +93,8 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
         ));
-        container.setBackgroundColor(Color.parseColor("#FFFFFF"));
+        container.setBackgroundColor(Color.parseColor("#0F172A"));
+        container.setFitsSystemWindows(true);
 
         webView = new WebView(this);
         webView.setLayoutParams(new FrameLayout.LayoutParams(

@@ -4,13 +4,13 @@ plugins {
 
 android {
     namespace "app.phrasejuste.mobile"
-    compileSdk 34
+    compileSdk 36
 
     defaultConfig {
         applicationId "app.phrasejuste.mobile"
-        minSdk 23
-        targetSdk 34
-        versionCode 100
+        minSdk 24
+        targetSdk 36
+        versionCode 101
         versionName "1.0.0"
     }
 

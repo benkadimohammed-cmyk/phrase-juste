@@ -301,6 +301,180 @@ async function startServer() {
   app.get("/releases/Phrase-juste-v1.0.0.apk", serveVerifiedApk);
   app.get("/releases/Phrase%20juste%201.0.0.apk", serveVerifiedApk);
 
+  // Helper to wrap raw 24kHz 16-bit mono PCM base64 into a standard WAV base64
+  const pcm16ToWavBase64 = (pcmBase64: string, sampleRate = 24000): string => {
+    const pcmBuffer = Buffer.from(pcmBase64, "base64");
+    const wavHeader = Buffer.alloc(44);
+    const dataLen = pcmBuffer.length;
+    wavHeader.write("RIFF", 0);
+    wavHeader.writeUInt32LE(36 + dataLen, 4);
+    wavHeader.write("WAVE", 8);
+    wavHeader.write("fmt ", 12);
+    wavHeader.writeUInt32LE(16, 16); // Subchunk1Size (16 for PCM)
+    wavHeader.writeUInt16LE(1, 20); // AudioFormat (1 = PCM)
+    wavHeader.writeUInt16LE(1, 22); // NumChannels (1 = mono)
+    wavHeader.writeUInt32LE(sampleRate, 24); // SampleRate
+    wavHeader.writeUInt32LE(sampleRate * 2, 28); // ByteRate
+    wavHeader.writeUInt16LE(2, 32); // BlockAlign
+    wavHeader.writeUInt16LE(16, 34); // BitsPerSample
+    wavHeader.write("data", 36);
+    wavHeader.writeUInt32LE(dataLen, 40);
+    return Buffer.concat([wavHeader, pcmBuffer]).toString("base64");
+  };
+
+  const buildVoiceTurnReply = (spoken: string, level: string) => {
+    const lower = spoken.toLowerCase().trim();
+    if (lower.includes("visité mon") || lower.includes("visité ma") || lower.includes("visiter mon")) {
+      return {
+        coachTranscript:
+          "Attention à ce piège très fréquent : en français, on visite un musée ou une ville, mais on « rend visite à » une personne ! Dites plutôt : « Hier, j'ai rendu visite à mon ami Paul à Lyon. » Et vous, à qui avez-vous rendu visite récemment ?",
+        grammarNote: "Lexique : visiter un lieu vs. rendre visite à quelqu'un",
+        phoneticTip: "Faites bien la liaison dans « rendu visite_à » [vizi.ta].",
+        suggestedFollowUp: "Dimanche dernier, j'ai rendu visite à mes grands-parents.",
+      };
+    }
+    if (lower.includes("suis très faim") || lower.includes("suis faim") || lower.includes("suis froid")) {
+      return {
+        coachTranscript:
+          "Presque parfait ! En français, les sensations physiques s'expriment avec l'auxiliaire « avoir » : dites « J'ai très faim, où est la boulangerie ? ». Qu'est-ce que vous aimeriez commander à la boulangerie ?",
+        grammarNote: "Expressions avec avoir : avoir faim, avoir soif, avoir froid",
+        phoneticTip: "Prononcez « j'ai faim » avec la voyelle nasale [ɛ̃] bien ouverte.",
+        suggestedFollowUp: "Je voudrais un croissant chaud et un café allongé, s'il vous plaît.",
+      };
+    }
+    if (lower.includes("bien qu'il pleuve") || lower.includes("subjonctif") || lower.includes("faut que")) {
+      return {
+        coachTranscript:
+          "Bravo, votre emploi du subjonctif après « bien que » est irréprochable ! « Bien qu'il pleuve, je préfère marcher jusqu'au musée. » Quel musée souhaitez-vous découvrir aujourd'hui ?",
+        grammarNote: "Concession : Bien que + subjonctif présent (pleuve)",
+        phoneticTip: "Articulez nettement le « v » final de « pleuve » [plœv].",
+        suggestedFollowUp: "Je souhaite visiter le musée d'Orsay cet après-midi.",
+      };
+    }
+    if (lower.includes("café") || lower.includes("croissant") || lower.includes("boulangerie") || lower.includes("commander")) {
+      return {
+        coachTranscript:
+          "Excellent choix ! En terrasse à Paris, le serveur vous demandera : « Ce sera tout ? Avec ceci ? ». Vous pouvez répondre : « Ce sera tout, je vous remercie. » Préférez-vous payer par carte ou en espèces ?",
+        grammarNote: "Politesse au conditionnel : Je voudrais / J'aimerais",
+        phoneticTip: "Liaison douce dans « un_expresso » ou « s'il vous plaît ».",
+        suggestedFollowUp: "Ce sera tout, je vais régler par carte bancaire, merci.",
+      };
+    }
+    if (lower.includes("travail") || lower.includes("entretien") || lower.includes("projet") || lower.includes("expérience")) {
+      return {
+        coachTranscript:
+          "Votre registre professionnel est très soigné. Pour valoriser votre parcours, utilisez « J'ai eu l'occasion de piloter ce projet » ou « Cette expérience m'a permis de développer... ». Quelle est votre principale qualité professionnelle ?",
+        grammarNote: "Registre soutenu & connecteurs logiques (en outre, par ailleurs)",
+        phoneticTip: "Rythmez votre phrase en marquant une légère pause après le connecteur.",
+        suggestedFollowUp: "Cette expérience m'a permis de renforcer ma rigueur et mon esprit d'équipe.",
+      };
+    }
+    return {
+      coachTranscript: `Très belle phrase pour le niveau ${level} ! Votre prononciation et votre syntaxe sont claires. Pour enrichir encore votre expression, vous pouvez ajouter un connecteur comme « d'ailleurs » ou « en effet ». Voulez-vous continuer sur ce sujet ?`,
+      grammarNote: `Fluidité orale · CECRL ${level}`,
+      phoneticTip: "Maintenez une intonation montante sur la question finale.",
+      suggestedFollowUp: "En effet, j'essaie de pratiquer le français tous les jours.",
+    };
+  };
+
+  // Gemini TTS endpoint (/api/tts) using gemini-3.8-flash-lite-tts
+  app.post("/api/tts", async (req, res) => {
+    const { text } = req.body || {};
+    if (!text || typeof text !== "string") {
+      res.status(400).json({ error: "Text is required." });
+      return;
+    }
+
+    const ai = getGenAIClient();
+    if (!ai) {
+      res.json({ audioWavBase64: null, fallback: true });
+      return;
+    }
+
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-3.8-flash-lite-tts",
+        contents: [
+          {
+            parts: [
+              {
+                text: `Prononce clairement en français standard : ${text.slice(0, 600)}`,
+              },
+            ],
+          },
+        ],
+        config: {
+          responseModalities: [Modality.AUDIO],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: "Kore" },
+            },
+          },
+        },
+      });
+
+      const pcmBase64 =
+        response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      if (!pcmBase64) {
+        res.json({ audioWavBase64: null, fallback: true });
+        return;
+      }
+
+      const audioWavBase64 = pcm16ToWavBase64(pcmBase64, 24000);
+      res.json({ audioWavBase64 });
+    } catch (err) {
+      console.error("Gemini TTS fallback:", err);
+      res.json({ audioWavBase64: null, fallback: true });
+    }
+  });
+
+  // Voice conversation turn endpoint (/api/voice-turn)
+  app.post("/api/voice-turn", async (req, res) => {
+    const { spokenFrench, level = "A2" } = req.body || {};
+    if (!spokenFrench || typeof spokenFrench !== "string") {
+      res.status(400).json({ error: "spokenFrench is required." });
+      return;
+    }
+
+    const ai = getGenAIClient();
+    if (!ai) {
+      res.json(buildVoiceTurnReply(spokenFrench, level));
+      return;
+    }
+
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-3.8-flash",
+        contents: `The CEFR ${level} learner just spoke this in French during a live voice coaching session: "${spokenFrench}". Respond as their warm, articulate French voice coach.`,
+        config: {
+          systemInstruction: `You are the "Phrase juste" Live French Voice Coach.
+Speak natural, encouraging French adapted to CEFR ${level}.
+In "coachTranscript", write 2-3 natural spoken sentences in French: gently praise or correct their phrasing ("la phrase juste") and ask a short follow-up question in French to keep the oral conversation flowing.`,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              coachTranscript: { type: Type.STRING },
+              grammarNote: { type: Type.STRING },
+              phoneticTip: { type: Type.STRING },
+              suggestedFollowUp: { type: Type.STRING },
+            },
+            required: ["coachTranscript", "grammarNote", "phoneticTip", "suggestedFollowUp"],
+          },
+        },
+      });
+
+      const text = response.text;
+      if (!text) {
+        res.json(buildVoiceTurnReply(spokenFrench, level));
+        return;
+      }
+      res.json(JSON.parse(text));
+    } catch {
+      res.json(buildVoiceTurnReply(spokenFrench, level));
+    }
+  });
+
   // Gemini Live API WebSocket proxy on /live (gemini-3.8-live)
   const wss = new WebSocketServer({ server: httpServer, path: "/live" });
   wss.on("connection", async (ws, req) => {
@@ -308,6 +482,20 @@ async function startServer() {
     const level = url.searchParams.get("level") || "A2";
     const ai = getGenAIClient();
     let liveSession: Awaited<ReturnType<GoogleGenAI["live"]["connect"]>> | null = null;
+
+    // Immediately send an initial spoken welcome turn so the user hears the coach right away
+    const welcomeText =
+      level === "A1" || level === "A2"
+        ? "Bonjour ! Je suis votre coach vocal Phrase juste. Parlez-moi en français ou choisissez une réplique : comment s'est passée votre journée ?"
+        : "Bonjour et bienvenue dans votre studio vocal Phrase juste ! De quel sujet souhaitez-vous discuter aujourd'hui ?";
+
+    ws.send(
+      JSON.stringify({
+        coachTranscript: welcomeText,
+        note: `Session vocale active · CECRL ${level}`,
+        phoneticTip: "Parlez distinctement, je vous écoute et corrige vos tournures en direct.",
+      })
+    );
 
     if (ai) {
       try {
@@ -357,15 +545,13 @@ async function startServer() {
           });
         } else if (data.textTurn) {
           const spoken = String(data.textTurn);
-          const reply = spoken.toLowerCase().includes("visité mon")
-            ? "Attention : dites plutôt « J'ai rendu visite à mon ami Paul à Lyon ». Avec une personne, on utilise toujours « rendre visite à »."
-            : spoken.toLowerCase().includes("suis très faim") || spoken.toLowerCase().includes("suis faim")
-            ? "Presque ! En français, on dit « J'ai très faim » avec l'auxiliaire avoir. La boulangerie est tout droit !"
-            : "Très bien dit ! L'emploi du subjonctif « bien qu'il pleuve » est parfaitement maîtrisé.";
+          const turnResult = buildVoiceTurnReply(spoken, level);
           ws.send(
             JSON.stringify({
-              coachTranscript: reply,
-              note: `Gemini Live · CECRL ${level}`,
+              coachTranscript: turnResult.coachTranscript,
+              note: turnResult.grammarNote,
+              phoneticTip: turnResult.phoneticTip,
+              suggestedFollowUp: turnResult.suggestedFollowUp,
             })
           );
         }

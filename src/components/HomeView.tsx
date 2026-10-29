@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import {
   ArrowRight,
   Award,
@@ -6,15 +6,18 @@ import {
   CheckCircle2,
   Clock,
   Flame,
+  LogIn,
   MessageSquare,
   Plus,
   ShieldCheck,
+  Sparkles,
   Target,
   TrendingUp,
   Volume2,
 } from "lucide-react";
 import {
   ActiveTab,
+  AuthAccount,
   DailyMission,
   Lesson,
   UILanguage,
@@ -36,8 +39,10 @@ interface HomeViewProps {
   recommendedLesson: Lesson;
   todayDateStr: string;
   todayMinutes: number;
+  authAccount?: AuthAccount | null;
   t: UIStrings;
   onNavigate: (tab: ActiveTab) => void;
+  onOpenAuthModal?: () => void;
   onOpenLesson: (lesson: Lesson) => void;
   onStartLessonExercises: (lessonId: string) => void;
   onStartFilteredExercise: (mode: "all" | "mistakes" | "correction") => void;
@@ -47,20 +52,76 @@ interface HomeViewProps {
 
 const QUICK_GOALS = [5, 10, 15, 20, 30];
 
+const REGISTER_STUDIO_ITEMS = [
+  {
+    id: "ask-help",
+    topicFr: "Demander un service",
+    topicEn: "Asking for a favor",
+    topicAr: "طلب خدمة بلطف",
+    registers: {
+      familier: {
+        label: "Familier (Oral spontané)",
+        french: "Tu peux me donner un coup de main deux minutes ?",
+        note: "Question par intonation directe + expression idiomatique « coup de main ».",
+      },
+      courant: {
+        label: "Courant (Quotidien soigné)",
+        french: "Est-ce que vous pourriez m'aider un instant, s'il vous plaît ?",
+        note: "Conditionnel de politesse (« pourriez ») + structure « Est-ce que ».",
+      },
+      soutenu: {
+        label: "Soutenu (Professionnel / Écrit)",
+        french: "Auriez-vous l'amabilité de m'accorder quelques instants ?",
+        note: "Inversion du sujet au conditionnel + lexique choisi (« accorder »).",
+      },
+    },
+  },
+  {
+    id: "apologize-delay",
+    topicFr: "S'excuser d'un retard",
+    topicEn: "Apologizing for a delay",
+    topicAr: "الاعتذار عن تأخير",
+    registers: {
+      familier: {
+        label: "Familier (Entre proches)",
+        french: "Désolé pour le retard, j'ai raté mon métro !",
+        note: "Ellipse du « Je suis » + verbe « rater » (registre familier).",
+      },
+      courant: {
+        label: "Courant (Standard)",
+        french: "Excusez-moi d'être en retard, les transports étaient bloqués.",
+        note: "S'excuser de + infinitif + concordance à l'imparfait.",
+      },
+      soutenu: {
+        label: "Soutenu (Formel)",
+        french: "Je vous prie de bien vouloir excuser ce contretemps indépendant de ma volonté.",
+        note: "Formule de politesse classique (« Je vous prie de bien vouloir »).",
+      },
+    },
+  },
+];
+
 export const HomeView: React.FC<HomeViewProps> = ({
   settings,
   progress,
   recommendedLesson,
   todayDateStr,
   todayMinutes,
+  authAccount,
   t,
   onNavigate,
+  onOpenAuthModal,
   onOpenLesson,
   onStartLessonExercises,
   onStartFilteredExercise,
   onUpdateGoalMinutes,
   onLogQuickStudyMinutes,
 }) => {
+  const [selectedScenarioIdx, setSelectedScenarioIdx] = useState(0);
+  const [selectedRegister, setSelectedRegister] = useState<
+    "familier" | "courant" | "soutenu"
+  >("courant");
+
   const lang: UILanguage = settings.uiLanguage;
   const accuracy = calculateAccuracy(
     progress.totalCorrect,
@@ -90,6 +151,9 @@ export const HomeView: React.FC<HomeViewProps> = ({
     settings.dailyGoalMinutes
   );
   const latestXpEvent = progress.xpHistory?.[0] || null;
+  const activeScenario =
+    REGISTER_STUDIO_ITEMS[selectedScenarioIdx] || REGISTER_STUDIO_ITEMS[0];
+  const activeRegisterCard = activeScenario.registers[selectedRegister];
 
   return (
     <div className="space-y-8">
@@ -106,14 +170,41 @@ export const HomeView: React.FC<HomeViewProps> = ({
                 <span aria-hidden="true">·</span>
                 <span>{t.tagline}</span>
               </div>
-              <a
-                href="/releases/Phrase-juste-v1.0.0.apk"
-                download="Phrase-juste-v1.0.0.apk"
-                data-testid="home-apk-download-link"
-                className="inline-flex items-center gap-1 font-semibold text-blue-800 dark:text-blue-400 hover:underline whitespace-nowrap shrink-0"
-              >
-                <span>APK v1.0.0</span>
-              </a>
+
+              <div className="flex items-center gap-3 shrink-0">
+                {authAccount ? (
+                  <button
+                    type="button"
+                    onClick={() => onNavigate("profile")}
+                    className="inline-flex items-center gap-1.5 font-semibold text-emerald-700 dark:text-emerald-400 hover:underline cursor-pointer"
+                  >
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    <span className="truncate max-w-[160px]">
+                      {authAccount.email}
+                    </span>
+                  </button>
+                ) : (
+                  onOpenAuthModal && (
+                    <button
+                      type="button"
+                      onClick={onOpenAuthModal}
+                      className="inline-flex items-center gap-1 font-bold text-blue-800 dark:text-blue-400 hover:underline cursor-pointer"
+                    >
+                      <LogIn className="w-3.5 h-3.5" />
+                      <span>Connexion (Google / E-mail)</span>
+                    </button>
+                  )
+                )}
+                <span aria-hidden="true">·</span>
+                <a
+                  href="/releases/Phrase-juste-v1.0.0.apk"
+                  download="Phrase-juste-v1.0.0.apk"
+                  data-testid="home-apk-download-link"
+                  className="inline-flex items-center gap-1 font-semibold text-blue-800 dark:text-blue-400 hover:underline whitespace-nowrap shrink-0"
+                >
+                  <span>APK Android 16</span>
+                </a>
+              </div>
             </div>
 
             <h1 className="text-2xl sm:text-3xl font-bold text-slate-950 dark:text-white tracking-tight">
@@ -596,7 +687,8 @@ export const HomeView: React.FC<HomeViewProps> = ({
                     onClick={() =>
                       speakFrench(
                         "J'ai rendu visite à mon ami Paul à Paris.",
-                        settings.audioEnabled
+                        true,
+                        settings.speechRate ?? 0.95
                       )
                     }
                     aria-label="Écouter la prononciation : J'ai rendu visite à mon ami Paul à Paris"
@@ -622,6 +714,120 @@ export const HomeView: React.FC<HomeViewProps> = ({
           </div>
         </section>
       </div>
+
+      {/* Creative Interactive Studio: Atelier des Registres (Familier / Courant / Soutenu) */}
+      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-7 space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800 pb-4">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-blue-800 dark:text-blue-400">
+              <Sparkles className="w-4 h-4 text-amber-500" />
+              <span>Atelier d'Expression · Les 3 Registres du Français</span>
+            </div>
+            <h2 className="text-lg sm:text-xl font-bold text-slate-950 dark:text-white">
+              Choisir le ton juste selon votre interlocuteur
+            </h2>
+          </div>
+
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {REGISTER_STUDIO_ITEMS.map((item, idx) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setSelectedScenarioIdx(idx)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
+                  selectedScenarioIdx === idx
+                    ? "bg-slate-900 text-white dark:bg-white dark:text-slate-950"
+                    : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200"
+                }`}
+              >
+                {lang === "ar"
+                  ? item.topicAr
+                  : lang === "en"
+                  ? item.topicEn
+                  : item.topicFr}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {(["familier", "courant", "soutenu"] as const).map((regKey) => {
+            const item = activeScenario.registers[regKey];
+            const isSelected = selectedRegister === regKey;
+            return (
+              <div
+                key={regKey}
+                onClick={() => setSelectedRegister(regKey)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    setSelectedRegister(regKey);
+                  }
+                }}
+                className={`p-4 rounded-2xl border text-start transition-all cursor-pointer flex flex-col justify-between gap-3 ${
+                  isSelected
+                    ? "border-blue-800 dark:border-blue-400 bg-blue-50/50 dark:bg-blue-950/30 shadow-xs"
+                    : "border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 hover:border-slate-300"
+                }`}
+              >
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-blue-800 dark:text-blue-400">
+                      {item.label}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedRegister(regKey);
+                        speakFrench(
+                          item.french,
+                          true,
+                          settings.speechRate ?? 0.95
+                        );
+                      }}
+                      aria-label={`Écouter : ${item.french}`}
+                      className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-semibold text-blue-800 dark:text-blue-300 inline-flex items-center gap-1 hover:border-blue-600 cursor-pointer"
+                    >
+                      <Volume2 className="w-3.5 h-3.5" />
+                      <span>Écouter</span>
+                    </button>
+                  </div>
+                  <p
+                    dir="ltr"
+                    className="text-sm font-bold text-slate-900 dark:text-white leading-snug"
+                  >
+                    « {item.french} »
+                  </p>
+                </div>
+
+                <p className="text-xs text-slate-600 dark:text-slate-400 pt-2 border-t border-slate-200/60 dark:border-slate-700/60">
+                  {item.note}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="flex items-center justify-between gap-3 pt-1 text-xs text-slate-500 dark:text-slate-400 flex-wrap">
+          <span>
+            Registre sélectionné :{" "}
+            <strong className="text-slate-900 dark:text-white">
+              {activeRegisterCard.label}
+            </strong>
+          </span>
+          <button
+            type="button"
+            onClick={() => onNavigate("coach")}
+            className="font-semibold text-blue-800 dark:text-blue-400 hover:underline inline-flex items-center gap-1 cursor-pointer"
+          >
+            <span>Pratiquer ce registre à l'oral avec le Coach</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </section>
     </div>
   );
 };
+

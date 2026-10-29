@@ -176,6 +176,12 @@ export interface UserProgress {
   streakFreezeUsedDates: string[];
 }
 
+export type LearningObjective =
+  | "conversation"
+  | "delf_dalf"
+  | "professional"
+  | "travel";
+
 export interface UserSettings {
   learnerName: string;
   uiLanguage: UILanguage;
@@ -183,6 +189,18 @@ export interface UserSettings {
   dailyGoalMinutes: number;
   darkMode: boolean;
   audioEnabled: boolean;
+  speechRate?: number;
+  learningObjective?: LearningObjective;
+  learnerBio?: string;
+  memberSince?: string;
+}
+
+export interface AuthAccount {
+  uid: string;
+  email: string;
+  displayName: string;
+  provider: "google" | "password";
+  photoURL?: string | null;
 }
 
 export interface CoachMessage {

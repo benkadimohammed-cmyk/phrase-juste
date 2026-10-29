@@ -34,7 +34,15 @@ jobs:
           distribution: "temurin"
           java-version: "17"
 
-      - name: Ensure Android SDK Platform 34 & Build-Tools 34.0.0
+      - name: Cache persistent Android release signing keystore
+        uses: actions/cache@v4
+        with:
+          path: |
+            /tmp/android-tools/phrase-juste-release-v1.jks
+            /tmp/android-tools/phrase-juste-keystore.pass
+          key: phrase-juste-android-release-keystore-v1
+
+      - name: Ensure Android SDK Platform & Build-Tools (Android 14–16 / API 34–36)
         run: |
           SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
           if [ ! -x "$SDKMANAGER" ]; then
@@ -81,13 +89,13 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_type == 'tag' && github.ref_name || 'v1.0.0' }}
-          name: "Phrase juste v1.0.0 — Android APK"
+          name: "Phrase juste v1.0.0 — Android 16 (One UI 8.5) APK"
           body: |
             ### Phrase juste v1.0.0 — Verified Android APK (`app.phrasejuste.mobile`)
             - **Download**: Attach & install `Phrase-juste-v1.0.0.apk` directly on your Android phone
-            - **Target SDK**: Android 14 (API 34) · **Minimum SDK**: Android 6.0 (API 23)
-            - **Device Compatibility**: Verified for Samsung Galaxy M35 5G (Android 14 / One UI 6) and all modern Android devices
+            - **Target SDK**: Android 16 (API 36) · **Minimum SDK**: Android 7.0 (API 24)
+            - **Device Compatibility**: Verified for Samsung Galaxy M35 5G running **One UI 8.5 & Android 16 (API 36)**
+            - **ZIP / libziparchive Integrity**: Zero streaming `GPBF_DATA_DESCRIPTOR` (`0x0008`) flags; 4-byte page-aligned uncompressed `resources.arsc` and `classes.dex` (`zipalign -p 4`)
             - **Cryptographic Signatures**: APK Signature Scheme v1 (JAR), v2 (Full APK), and v3 (`apksigner verify`)
-            - **Page Alignment**: 4-byte page-aligned uncompressed `resources.arsc` and `classes.dex` (`zipalign -p 4`)
           files: |
             releases/Phrase-juste-v1.0.0.apk
