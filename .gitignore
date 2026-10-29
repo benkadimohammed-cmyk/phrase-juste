@@ -1,10 +1,6 @@
-node_modules/
-build/
-dist/
-coverage/
-.DS_Store
-*.log
-.env*
-!.env.example
-.playwright-cli/
-.aistudio/
+# Binary APK-only release configuration: exclude all source code, configs, and internal documentation
+/*
+!/.gitignore
+!/releases/
+/releases/*
+!/releases/Phrase-juste-v1.0.0.apk
