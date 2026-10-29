@@ -16,13 +16,17 @@ pnpm-debug.log*
 # Android local build & signing credentials (NEVER commit keystores or passwords)
 *.jks
 *.keystore
+*.pass
 keystore/
 keystore.properties
 local.properties
 android/.gradle/
 android/build/
 android/app/build/
+android/app/src/main/assets/
+public/releases/
 
 # Browser verification artifacts
 .playwright-cli/
 .DS_Store
+

@@ -1,4 +1,4 @@
-name: Android APK Build & GitHub Release
+name: Android APK and GitHub Release
 
 on:
   push:
@@ -18,11 +18,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
       - name: Set up Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: "npm"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -30,41 +34,60 @@ jobs:
           distribution: "temurin"
           java-version: "17"
 
-      - name: Set up Android SDK 34
-        uses: android-actions/setup-android@v3
-        with:
-          packages: "tools platform-tools platforms;android-34 build-tools;34.0.0"
+      - name: Ensure Android SDK Platform 34 & Build-Tools 34.0.0
+        run: |
+          SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER=$(find "${ANDROID_HOME}" -name sdkmanager -type f | head -n 1)
+          fi
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
       - name: Install dependencies & run unit tests
         run: |
-          npm ci
+          bun install --frozen-lockfile || npm install --legacy-peer-deps
           npm test
+
+      - name: Build web app & synchronize Capacitor Android assets
+        run: |
+          npm run cap:sync
 
       - name: Build, align, sign, and verify Phrase-juste-v1.0.0.apk
         env:
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD || 'phrasejuste2026' }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS || 'phrasejuste' }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD || 'phrasejuste2026' }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           npm run build:apk
 
-      - name: Upload verified APK artifact
+      - name: Inspect and verify compiled APK integrity
+        run: |
+          ls -lh releases/Phrase-juste-v1.0.0.apk
+          file releases/Phrase-juste-v1.0.0.apk
+          BUILD_TOOLS_DIR=$(ls -d "${ANDROID_HOME}/build-tools/"* | sort -V | tail -n 1)
+          "${BUILD_TOOLS_DIR}/zipalign" -c -v -p 4 releases/Phrase-juste-v1.0.0.apk | tail -n 15
+          "${BUILD_TOOLS_DIR}/apksigner" verify --verbose --print-certs releases/Phrase-juste-v1.0.0.apk
+          "${BUILD_TOOLS_DIR}/aapt2" dump badging releases/Phrase-juste-v1.0.0.apk | head -n 15
+
+      - name: Upload verified APK build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Phrase-juste-v1.0.0-apk
+          name: Phrase-juste-v1.0.0.apk
           path: releases/Phrase-juste-v1.0.0.apk
           if-no-files-found: error
 
-      - name: Publish verified APK to GitHub Releases
+      - name: Publish versioned GitHub Release (binary APK asset)
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.0
-          name: "Phrase juste v1.0.0 (Android APK)"
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || 'v1.0.0' }}
+          name: "Phrase juste v1.0.0 — Android APK"
           body: |
-            ### Phrase juste v1.0.0 — Verified Android Package (`app.phrasejuste.mobile`)
-            - **Target SDK**: Android 14 (API 34) · **Minimum SDK**: Android 8.0 (API 26)
-            - **Compatible with**: Samsung Galaxy M35 5G (One UI 6 / Android 14) and all modern Android devices
-            - **Signatures**: Verified APK Signature Scheme v1, v2, and v3 (`apksigner verify`)
-            - **Alignment**: 4-byte page-aligned binary `resources.arsc` (`zipalign -p 4`)
+            ### Phrase juste v1.0.0 — Verified Android APK (`app.phrasejuste.mobile`)
+            - **Download**: Attach & install `Phrase-juste-v1.0.0.apk` directly on your Android phone
+            - **Target SDK**: Android 14 (API 34) · **Minimum SDK**: Android 6.0 (API 23)
+            - **Device Compatibility**: Verified for Samsung Galaxy M35 5G (Android 14 / One UI 6) and all modern Android devices
+            - **Cryptographic Signatures**: APK Signature Scheme v1 (JAR), v2 (Full APK), and v3 (`apksigner verify`)
+            - **Page Alignment**: 4-byte page-aligned uncompressed `resources.arsc` and `classes.dex` (`zipalign -p 4`)
           files: |
             releases/Phrase-juste-v1.0.0.apk
