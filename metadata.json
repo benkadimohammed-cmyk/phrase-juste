@@ -1,0 +1,6 @@
+{
+  "name": "Phrase juste",
+  "description": "A mobile-first French learning application focused on grammar precision, sentence construction, interactive exercises, and an AI French coach with English, French, and Arabic (RTL) interface support.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
